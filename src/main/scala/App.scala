@@ -41,7 +41,7 @@ object App {
    * 1. Consume JSON from apiUrl every 10 seconds.
    * 2. Split it into separate rows
    * 3. Parse it into JSON
-   * 4. Filter, Group By, Map/Reduce, Count the records
+   * 4. Filter, Group By, Map/Reduce, Count the records etc.
    */
   def main(args: Array[String]): Unit = {
     implicit val system: ActorSystem = ActorSystem()
