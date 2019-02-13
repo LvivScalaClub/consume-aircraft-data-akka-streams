@@ -47,6 +47,9 @@ object App {
     implicit val system: ActorSystem = ActorSystem()
     implicit val materializer: ActorMaterializer = ActorMaterializer()
 
+    //https://doc.akka.io/docs/akka/current/stream/index.html?language=scala
+    //https://doc.akka.io/docs/akka-http/current/index.html?language=scala
+    //https://doc.akka.io/docs/alpakka/current/
 
     //WRITE CODE HERE
   }
