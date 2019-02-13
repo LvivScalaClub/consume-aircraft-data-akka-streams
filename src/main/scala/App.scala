@@ -47,6 +47,70 @@ object App {
     implicit val system: ActorSystem = ActorSystem()
     implicit val materializer: ActorMaterializer = ActorMaterializer()
 
-    //WRITE CODE HERE
+    Source.tick(0.seconds, 10.seconds, None)
+      .mapAsync(1) { _ =>
+        println(s"Consuming new file at ${LocalDateTime.now}")
+        Http().singleRequest(HttpRequest(uri = apiUrl))
+      }
+      .flatMapConcat(_.entity.dataBytes) //get JSON payload from response as Source
+      .via(JsonReader.select("$.acList[*]"))
+      .map(_.utf8String)
+      .map((jsonStr: String) => parse(jsonStr).getOrElse(Json.Null).as[AircraftState])
+      .collect {
+        case Right(data) => data
+      }
+      .filter(aircraftState => aircraftState.countryOfRegistration == "Taiwan")
+      .to(Sink.foreach(println)).run()
+  }
+
+  def exampleWithParsingAndCounting(implicit ac: ActorSystem, am: ActorMaterializer) = {
+    Source.tick(0.seconds, 20.seconds, None)
+      .mapAsync(1) { _ =>
+        println(s"Consuming new file at ${LocalDateTime.now}")
+        Http().singleRequest(HttpRequest(uri = apiUrl))
+      }
+      .flatMapConcat(_.entity.dataBytes) //get JSON payload from response as Source
+      .via(JsonReader.select("$.acList[*]"))
+      .map(_.utf8String)
+      .map((jsonStr: String) => parse(jsonStr).getOrElse(Json.Null).as[AircraftState])
+      .collect {
+        case Right(a) => a
+      }
+      .statefulMapConcat {
+        () =>
+          var count = 0
+          str =>
+            count += 1
+            List((count, str))
+      }.to(Sink.foreach(println)).run()
+  }
+
+  def exampleWithBackpressure(implicit ac: ActorSystem, am: ActorMaterializer) = {
+    Source.tick(0.seconds, 10.seconds, None)
+      .mapAsync(1)(_ => Http().singleRequest(HttpRequest(uri = apiUrl)))
+      .flatMapConcat(_.entity.dataBytes) //get JSON payload from response as Source
+      .via(JsonReader.select("$.acList[*]"))
+      .map(_.utf8String)
+      .map((jsonStr: String) => parse(jsonStr).getOrElse(Json.Null).as[AircraftState])
+      .collect {
+        case Right(a) => a
+      }
+      .statefulMapConcat {
+        () =>
+          var count = 0
+          str =>
+            count += 1
+            List((count, str))
+      }
+      .buffer(10000, OverflowStrategy.dropHead)
+      .via(Flow.fromFunction { case data@(count, str) =>
+        if (count > 5000 & count < 7000) {
+          println("Triggering backpressure")
+          Thread.sleep(10.seconds.toMillis)
+          data
+        }
+        else data
+      })
+      .to(Sink.foreach(println)).run()
   }
 }
