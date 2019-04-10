@@ -1,22 +1,12 @@
-import java.time.{Instant, LocalDateTime}
+import java.time.Instant
 import java.util.concurrent.TimeoutException
 
 import akka.NotUsed
 import akka.actor.ActorSystem
-import akka.http.scaladsl.Http
-import akka.http.scaladsl.model._
-import akka.stream.{ActorMaterializer, ActorMaterializerSettings, ClosedShape, Supervision}
-import akka.stream.alpakka.json.scaladsl.JsonReader
-import akka.stream.scaladsl.{Broadcast, Flow, GraphDSL, Merge, RunnableGraph, Sink, Source, Zip}
-import akka.util.ByteString
-import io.circe.Decoder.Result
-import io.circe.{Decoder, Json}
-import io.circe.generic.auto._
-import io.circe.parser._
-import io.circe.syntax._
+import akka.stream.scaladsl.{Broadcast, Flow, GraphDSL, RunnableGraph, Sink, Source, Unzip, Zip, ZipWith}
+import akka.stream.{ActorMaterializer, ActorMaterializerSettings, ClosedShape, FlowShape, Outlet, Supervision, UniformFanInShape}
 
 import scala.concurrent.ExecutionContext
-import scala.concurrent.duration._
 
 //https://www.adsbexchange.com/datafields/
 case class AircraftState(Icao: Int, Cou: String, Alt: Int, Lat: Double, `Long`: Double, PosTime: Long, Mdl: String, Year: Int, From: String, To: String, Gnd: Boolean) {
@@ -106,29 +96,33 @@ object App {
 
     /**
       * req -> enrichFlow: (Request, (Request, Long)) -> unzip -> unzip0 -> handler -> broadcast0 -> HttpOut
-      *                                                                             -> broadcast1 -> alzip0
-      *                                                                            unzip1 -> alzip1
+      *                                                                             -> broadcast1 -> al_zip0
+      *                                                           unzip1 -> al_zip1 -> al_function
       */
 
-    val g = RunnableGraph.fromGraph(GraphDSL.create() { implicit builder: GraphDSL.Builder[NotUsed] =>
+    def requestToResponseFlow(handlerF: Handler[NotUsed], alF: (((Request, Long), Response)) => Unit) = Flow.fromGraph(GraphDSL.create() { implicit b =>
       import GraphDSL.Implicits._
-      val in = Source(1 to 10)
-      val out = Sink.foreach[(Int, Int)](println)
 
-      val bcast = builder.add(Broadcast[Int](2))
-      //val merge = builder.add(Merge[Int](2))
-      val zip = builder.add(Zip[Int, Int])
+      val handler = b.add(handlerF)
+      val enrich = b.add(Flow[Request].map(r => (r, (r, System.currentTimeMillis()))))
+      val enrichUnzipper = b.add(Unzip[Request, (Request, Long)])
+      val responseBroadcast = b.add(Broadcast[Response](2))
+      val alZipper =  b.add(Zip[(Request, Long), Response])
+      val logger = Flow[((Request, Long), Response)].map[Unit](alF)
 
-      //val f1, f2, f3, f4 = Flow[Int].map(_ + 10)
-      val f1, f2, f4 = Flow[Int].map(_ + 10)
-      val f3 = Flow[(Int, Int)].map(identity)
+      enrich ~> enrichUnzipper.in
+                enrichUnzipper.out0 ~> handler ~> responseBroadcast
+                responseBroadcast.out(1) ~> alZipper.in1
+                enrichUnzipper.out1 ~> alZipper.in0
+                alZipper.out ~> logger ~> Sink.ignore
 
-      in ~> f1 ~> bcast ~> f2 ~> zip.in0
-                  bcast ~> f4 ~> zip.in1
-                                 zip.out ~> f3 ~> out
-      ClosedShape
+      FlowShape(enrich.in, responseBroadcast.out(0))
     })
 
-    g.run()
+
+    val routeHandler: Handler[NotUsed] = Flow[Request].map(r => r + r)
+    def accessLogger(a: ((Request, Long), Response)): Unit = println(a._1._2)
+
+    requestToResponseFlow(routeHandler, accessLogger).runWith(Source.single("req1"), Sink.foreach(println))
   }
 }
